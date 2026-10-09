@@ -1,0 +1,121 @@
+From c7d7e5940eeb551995f99db021d17e870746aea5 Mon Sep 17 00:00:00 2001
+From: Andrey <17542208+osahv@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 18:49:09 +0300
+Subject: [PATCH] Mesh: accept 256-bit (64 hex) channel keys
+
+derive_channel_key() only produced AES-128 keys, so custom channels of stock
+nodes that use a 32 byte PSK could not be read (hash mismatch, empty chat and
+node list). The router and the crypto already handle 16 and 32 byte keys; this
+makes key derivation return the key length (64 hex digits -> AES-256, 32 hex
+-> AES-128, anything else -> passphrase as before) and passes it on to the
+channel hash, the router and the channel share code.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ firmware/application/apps/ui_meshtastic.cpp | 38 +++++++++++++--------
+ firmware/application/apps/ui_meshtastic.hpp |  2 +-
+ 2 files changed, 25 insertions(+), 15 deletions(-)
+
+diff --git a/firmware/application/apps/ui_meshtastic.cpp b/firmware/application/apps/ui_meshtastic.cpp
+index 3a70967..4512879 100644
+--- a/firmware/application/apps/ui_meshtastic.cpp
++++ b/firmware/application/apps/ui_meshtastic.cpp
+@@ -4362,7 +4362,8 @@ void MeshtasticChannelsView::show_qr() {
+         return;
+     }
+     const int i = (sel.kind == Row::Channel) ? sel.slot : -1;
+-    uint8_t key[16];
++    uint8_t key[32];
++    size_t key_len = 0;
+     std::string l1, l2;
+ 
+     // Everything the far end needs to end up on our air, not just on our channel.
+@@ -4384,7 +4385,7 @@ void MeshtasticChannelsView::show_qr() {
+     const uint8_t default_psk = 1;  // "the well known public key", as the phone encodes it
+     if (i >= 0 && enabled_[i] && !names_[i].empty()) {
+         const bool has_key = !keys_[i].empty();
+-        if (has_key) MeshtasticView::derive_channel_key(keys_[i], key);
++        if (has_key) key_len = MeshtasticView::derive_channel_key(keys_[i], key);
+         // A custom channel of ours is a SECONDARY one: it shares the primary's air and
+         // is told apart by the channel hash. So the primary rides along, first, or the
+         // far end installs ours as its primary instead of beside it.
+@@ -4393,7 +4394,7 @@ void MeshtasticChannelsView::show_qr() {
+         sh.primary_psk_len = 1;
+         sh.name = names_[i].c_str();
+         sh.psk = key;
+-        sh.psk_len = has_key ? sizeof(key) : 0;
++        sh.psk_len = has_key ? key_len : 0;
+         qr_url_ = meshtastic::channel_share_url(sh);
+         l1 = "Channel " + names_[i];
+         l2 = std::string(meshtastic::PRESET_CHANNEL_NAMES[preset_idx_]) +
+@@ -6904,22 +6905,31 @@ void MeshtasticView::broadcast_telemetry() {
+     }
+ }
+ 
+-void MeshtasticView::derive_channel_key(const std::string& text, uint8_t out[16]) {
+-    bool all_hex = (text.size() == 32);
+-    for (size_t i = 0; all_hex && i < 32; i++)
+-        if (hex_digit(text[i]) < 0) all_hex = false;
+-    if (all_hex) {  // exact 32 hex -> raw AES-128 key
++size_t MeshtasticView::derive_channel_key(const std::string& text, uint8_t out[32]) {
++    const auto all_hex = [&](size_t n) {
++        if (text.size() != n) return false;
++        for (size_t i = 0; i < n; i++)
++            if (hex_digit(text[i]) < 0) return false;
++        return true;
++    };
++    if (all_hex(64)) {  // exact 64 hex -> raw AES-256 key (stock nodes with a 32 byte PSK)
++        for (int i = 0; i < 32; i++)
++            out[i] = static_cast<uint8_t>((hex_digit(text[2 * i]) << 4) | hex_digit(text[2 * i + 1]));
++        return 32;
++    }
++    if (all_hex(32)) {  // exact 32 hex -> raw AES-128 key
+         for (int i = 0; i < 16; i++)
+             out[i] = static_cast<uint8_t>((hex_digit(text[2 * i]) << 4) | hex_digit(text[2 * i + 1]));
+-        return;
++        return 16;
+     }
+     for (int i = 0; i < 16; i++) out[i] = 0;  // else derive from passphrase
+     if (text.empty()) {
+         out[0] = 1;
+-        return;
++        return 16;
+     }
+     for (size_t i = 0; i < 16; i++)
+         out[i] = static_cast<uint8_t>(text[i % text.size()] ^ (0x9E * (i + 1)));
++    return 16;
+ }
+ 
+ void MeshtasticView::apply_channels() {
+@@ -6940,11 +6950,11 @@ void MeshtasticView::apply_channels() {
+     for (int i = 0; i < MeshSettings::NUM_CUSTOM; i++) {
+         const bool on = cfg_.ch_enabled[i] && !cfg_.ch_name[i].empty();
+         if (on) {
+-            uint8_t key[16];
+-            derive_channel_key(cfg_.ch_key[i], key);
++            uint8_t key[32];
++            const size_t klen = derive_channel_key(cfg_.ch_key[i], key);
+             router_.set_channel(i + 1,
+-                                meshtastic::channel_hash(cfg_.ch_name[i].c_str(), key, 16),
+-                                key, 16, true);
++                                meshtastic::channel_hash(cfg_.ch_name[i].c_str(), key, klen),
++                                key, klen, true);
+         } else {
+             router_.set_channel(i + 1, 0, nullptr, 0, false);
+         }
+diff --git a/firmware/application/apps/ui_meshtastic.hpp b/firmware/application/apps/ui_meshtastic.hpp
+index dd10570..0251947 100644
+--- a/firmware/application/apps/ui_meshtastic.hpp
++++ b/firmware/application/apps/ui_meshtastic.hpp
+@@ -2072,7 +2072,7 @@ class MeshtasticView : public View {
+     explicit MeshtasticView(NavigationView& nav);
+     // Passphrase (or 32 hex characters, taken as a raw AES-128 key) -> channel key.
+     // Public because the conversations view builds a channel QR code from it.
+-    static void derive_channel_key(const std::string& text, uint8_t out[16]);
++    static size_t derive_channel_key(const std::string& text, uint8_t out[32]);  // returns 16 or 32 (bytes)
+     ~MeshtasticView();
+ 
+     void focus() override;
+-- 
+2.39.5 (Apple Git-154)
+

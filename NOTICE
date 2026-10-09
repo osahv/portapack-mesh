@@ -1,0 +1,6 @@
+This repository contains build tooling, documentation and one small patch for the Meshtastic app for the PortaPack
+Mayhem firmware. The app itself is the work of verhogladov (pull request #3306 against portapack-mayhem/mayhem-firmware,
+not merged at the time of writing); the firmware is Mayhem (GPL). Neither is endorsed by or affiliated with this project.
+
+patches/0001-*  : our change on top of that PR (256-bit channel keys), GPL-2.0-or-later like the code it modifies.
+tools/, scripts/, docs/ : GPL-2.0-or-later.
