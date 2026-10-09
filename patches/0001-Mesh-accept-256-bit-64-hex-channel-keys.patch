@@ -1,7 +1,7 @@
 From c7d7e5940eeb551995f99db021d17e870746aea5 Mon Sep 17 00:00:00 2001
 From: Andrey <17542208+osahv@users.noreply.github.com>
 Date: Fri, 9 Oct 2026 18:49:09 +0300
-Subject: [PATCH] Mesh: accept 256-bit (64 hex) channel keys
+Subject: [PATCH 1/4] Mesh: accept 256-bit (64 hex) channel keys
 
 derive_channel_key() only produced AES-128 keys, so custom channels of stock
 nodes that use a 32 byte PSK could not be read (hash mismatch, empty chat and

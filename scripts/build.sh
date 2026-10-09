@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build Mayhem with the Meshtastic app from upstream PR #3306 plus the patches in ../patches (Docker required).
-# Usage: scripts/build.sh            -> dist/mesh-pr3306-aes256/{FIRMWARE,APPS,BASEBAND}
+# Usage: scripts/build.sh            -> dist/mesh-pr3306-aes256-nodes/{FIRMWARE,APPS,BASEBAND}
 set -euo pipefail
 PR=3306
 PR_COMMIT=51135ec96d7c3625edfa6bd879d2d2bc2850594c   # head of the PR this repository was built and tested against
-VER=mesh-pr3306-aes256                                  # version string: the ppma compatibility hash is derived from it
+VER=mesh-pr3306-aes256-nodes                            # version string: the ppma compatibility hash is derived from it
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$HERE/build/mayhem"
 OUT="$HERE/dist/$VER"
@@ -32,7 +32,8 @@ for i in 1 2 3; do docker run --rm -e VERSION_STRING="$VER" -v "$WORK":/havoc po
 
 B="$WORK/build/firmware"
 rm -rf "$OUT"; mkdir -p "$OUT/FIRMWARE"
-cp "$B/portapack-mayhem-firmware.bin" "$OUT/FIRMWARE/portapack-mayhem_mesh-aes256.bin"
+cp "$B/portapack-mayhem-firmware.bin" "$OUT/FIRMWARE/portapack-mayhem_mesh-aes256-nodes.bin"
 cp -R "$B/firmware_tar/APPS" "$OUT/APPS"
 cp -R "$B/firmware_tar/BASEBAND" "$OUT/BASEBAND"
+cp "$HERE"/resources/mesh_font*.fnt "$OUT/APPS/"   # Cyrillic glyph tables (see README)
 echo "built: $OUT  (copy FIRMWARE, APPS and BASEBAND to the SD card, then flash the .bin with Flash Utility)"

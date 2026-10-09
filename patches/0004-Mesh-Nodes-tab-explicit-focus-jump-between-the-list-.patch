@@ -1,0 +1,54 @@
+From 220a217eda0259529f488fa5323394a80d4a78ad Mon Sep 17 00:00:00 2001
+From: Andrey <17542208+osahv@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 20:49:24 +0300
+Subject: [PATCH 4/4] Mesh: Nodes tab - explicit focus jump between the list
+ and its button row
+
+The list covers the button row, so the focus manager never found the buttons
+below it and they were unreachable with the D-pad. Down on the list now goes to
+the buttons, Up on a button returns to the list.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ firmware/application/apps/ui_meshtastic.cpp | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/firmware/application/apps/ui_meshtastic.cpp b/firmware/application/apps/ui_meshtastic.cpp
+index a22be6b..c6181f9 100644
+--- a/firmware/application/apps/ui_meshtastic.cpp
++++ b/firmware/application/apps/ui_meshtastic.cpp
+@@ -3175,6 +3175,18 @@ MeshtasticNodesView::MeshtasticNodesView(NavigationView& nav,
+     button_sort_.on_select = [this](Button&) { cycle_sort(); };
+     update_sort_caption();
+     button_all_.on_select = [this](Button&) { nav_.push<MeshtasticSeenView>(node_db_, now_ticks_); };
++    // Up from a button returns to the list; Down stays on the button row; Left/Right move along the row as usual.
++    const auto row_nav = [this](Button&, KeyEvent k) {
++        if (k == KeyEvent::Up) {
++            focus();
++            return true;
++        }
++        return k == KeyEvent::Down;
++    };
++    button_clear_.on_dir = row_nav;
++    button_sort_.on_dir = row_nav;
++    button_all_.on_dir = row_nav;
++    button_setup_.on_dir = row_nav;
+     button_setup_.on_select = [this](Button&) {
+         nav_.push<MeshtasticNodesConfigView>(offline_after_s_, forget_after_min_);
+     };
+@@ -3318,6 +3330,12 @@ bool MeshtasticNodesView::on_key(const KeyEvent key) {
+         open_selected();
+         return true;
+     }
++    // The list covers the button row (same rectangle), so the focus manager never finds the buttons "below" it: jump there
++    // explicitly. Up on any button comes back here (see the constructor).
++    if (key == KeyEvent::Down) {
++        button_sort_.focus();
++        return true;
++    }
+     return false;
+ }
+ 
+-- 
+2.39.5 (Apple Git-154)
+

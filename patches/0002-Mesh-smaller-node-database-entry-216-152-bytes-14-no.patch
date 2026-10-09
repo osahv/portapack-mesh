@@ -1,0 +1,249 @@
+From 0caf04c1a5f4fbea57f8b940b02e436367207dd9 Mon Sep 17 00:00:00 2001
+From: Andrey <17542208+osahv@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 19:42:16 +0300
+Subject: [PATCH 2/4] Mesh: smaller node database entry (216 -> 152 bytes), 14
+ nodes instead of 10
+
+Sensor values are kept as small fixed-point numbers and positions as the 1e-7
+degree integers they travel as, flags as bits, members ordered widest first.
+Reading and writing a field looks exactly as before. Fourteen entries take less
+memory than the ten did.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .../application/apps/mesh/mesh_nodedb.hpp     | 103 +++++++++---------
+ .../application/apps/mesh/mesh_protocol.cpp   |   8 +-
+ .../application/apps/mesh/mesh_protocol.hpp   |  48 +++++++-
+ 3 files changed, 103 insertions(+), 56 deletions(-)
+
+diff --git a/firmware/application/apps/mesh/mesh_nodedb.hpp b/firmware/application/apps/mesh/mesh_nodedb.hpp
+index effbb9e..7a7001a 100644
+--- a/firmware/application/apps/mesh/mesh_nodedb.hpp
++++ b/firmware/application/apps/mesh/mesh_nodedb.hpp
+@@ -16,73 +16,76 @@
+ namespace meshtastic {
+ 
+ // The whole node table lives in the app object, which sits in a 43 kB heap shared with
+-// everything else the app allocates. Each entry costs 216 bytes, and the number is
+-// chosen against the memory left rather than against ambition.
++// everything else the app allocates. The number of entries is chosen against the memory
++// left rather than against ambition.
+ //
+-// Twelve became ten for a measured reason. The map view needs 3736 bytes in one piece;
+-// after a few screens have been opened and closed the heap holds around four kilobytes
+-// but in two dozen fragments, so the request falls through to the unallocated core -
+-// which stood at 3472. Two entries are 432 bytes, and they turn a map that refuses to
+-// open into one that does. A handheld that can name ten neighbours and show them on a
+-// map beats one that can name twelve and cannot.
+-static constexpr size_t MAX_NODES = 10;
+-
++// History: each entry cost 216 bytes and the table held twelve, then ten, for a measured
++// reason. The map view needs 3736 bytes in one piece; after a few screens have been
++// opened and closed the heap holds around four kilobytes but in two dozen fragments, so
++// the request falls through to the unallocated core - which stood at 3472. Two entries
++// are 432 bytes, and they turned a map that refuses to open into one that does.
++// An entry is now 152 bytes (measured with -Wpadded; see NodeEntry below), so fourteen
++// of them take 2128 bytes - slightly less than the ten used to.
++static constexpr size_t MAX_NODES = 14;
++
++// Members are ordered widest first and the sensor values are kept as small fixed-point
++// numbers (see Fixed in mesh_protocol.hpp), flags as bits: no padding, no wasted bytes.
++// Reading and writing a field looks exactly as before (they convert to and from float).
+ struct NodeEntry {
+     uint32_t node_id{0};
+-    char long_name[41]{};
+-    char short_name[5]{};
++    uint32_t last_seen_uptime{0};   // system uptime ticks at last packet
++    uint32_t first_seen_uptime{0};  // when we first heard this node, shown in its detail page
++    uint32_t uptime_seconds{0};     // DeviceMetrics extras
++    float lux{-1.0f};               // EnvironmentMetrics extra; can exceed a 16 bit range, so a float
+     PositionData position{};
++
++    // Sensor values (-1 / -999 = unknown, as before), precision as shown on screen (one decimal).
++    Fixed<int16_t, 100> voltage{-1.0f};            // volts
++    Fixed<int16_t, 10> temperature{-999.0f};       // C
++    Fixed<int16_t, 10> humidity{-1.0f};            // %
++    Fixed<int16_t, 10> pressure{-1.0f};            // hPa
++    Fixed<int16_t, 100> channel_utilization{-1.0f};
++    Fixed<int16_t, 100> air_util_tx{-1.0f};
++    Fixed<int16_t, 10> gas_resistance{-1.0f};
++    uint16_t iaq{0};
++    uint16_t pm25{0}, pm10{0}, co2{0};  // AirQualityMetrics
++
+     int8_t last_rssi{0};
+-    float last_snr{0.0f};
+-    uint32_t last_seen_uptime{0};  // system uptime ticks at last packet
++    Fixed<int8_t, 4> last_snr{0.0f};  // dB in quarter-dB steps, +-31.75
+     uint8_t hop_count{0};
+     // What this node last told the mesh about its own neighbours (portnum 71): how
+     // many it hears directly, and - when we are one of them - the signal it hears US
+     // at. That last figure is the half of the link our own receiver cannot measure.
+-    bool unmessagable{false};  // the node says nobody reads messages on it
+     uint8_t nbr_count{0};
+-    bool nbr_hears_us{false};
+-    float nbr_snr_to_us{0.0f};
+-    bool active{false};
+-    bool has_position{false};
+-    float battery_level{-1.0f};  // -1 = unknown
+-    float voltage{-1.0f};        // volts, -1 = unknown
+-    float temperature{-999.0f};  // C, -999 = unknown
+-    float humidity{-1.0f};       // %, -1 = unknown
+-    float pressure{-1.0f};       // hPa, -1 = unknown
+-    uint8_t hw_model{0};         // which board the node runs (mesh.proto HardwareModel)
+-    uint8_t role{0};             // and in what role it advertises itself
+-    uint8_t public_key[32]{};    // Curve25519 pubkey (NodeInfo field 8, for PKC DMs)
+-    bool has_pubkey{false};
+-    // A direct-message thread exists with this node (we messaged it, or it messaged
+-    // us). Threads are listed next to the channels so a private conversation can be
+-    // reopened without hunting through the node list.
+-    bool dm_thread{false};
+-
++    Fixed<int8_t, 4> nbr_snr_to_us{0.0f};
++    Fixed<int8_t, 1> battery_level{-1.0f};  // percent, 101 = charging, -1 = unknown
++    uint8_t hw_model{0};                    // which board the node runs (mesh.proto HardwareModel)
++    uint8_t role{0};                        // and in what role it advertises itself
+     // Colour the chat marks this node's messages with, chosen in its detail page.
+     // 0 = none, 1..7 index a small fixed palette.
+     uint8_t colour{0};
+ 
+-    // When we first heard this node (uptime ticks), shown in its detail page.
+-    uint32_t first_seen_uptime{0};
++    bool unmessagable : 1;   // the node says nobody reads messages on it
++    bool nbr_hears_us : 1;
++    bool active : 1;
++    bool has_position : 1;
++    bool has_pubkey : 1;
++    // A direct-message thread exists with this node (we messaged it, or it messaged
++    // us). Threads are listed next to the channels so a private conversation can be
++    // reopened without hunting through the node list.
++    bool dm_thread : 1;
+     // What the node has actually told us about itself, so the list can show an icon
+     // per capability instead of columns that are blank for most nodes.
+-    bool has_telemetry{false};  // any device metrics (battery / voltage)
+-    bool has_env_data{false};   // temperature / humidity / pressure
+-    bool has_air_data{false};   // particulate matter / CO2
+-    bool has_stats{false};      // LocalStats from a "request stats" reply
+-
+-    // DeviceMetrics extras
+-    float channel_utilization{-1.0f};
+-    float air_util_tx{-1.0f};
+-    uint32_t uptime_seconds{0};
+-    // EnvironmentMetrics extras
+-    float gas_resistance{-1.0f};
+-    float lux{-1.0f};
+-    uint32_t iaq{0};
+-    // AirQualityMetrics
+-    uint16_t pm25{0}, pm10{0}, co2{0};
++    bool has_telemetry : 1;  // any device metrics (battery / voltage)
++    bool has_env_data : 1;   // temperature / humidity / pressure
++    bool has_air_data : 1;   // particulate matter / CO2
++    bool has_stats : 1;      // LocalStats from a "request stats" reply
++
++    char long_name[41]{};
++    char short_name[5]{};
++    uint8_t public_key[32]{};  // Curve25519 pubkey (NodeInfo field 8, for PKC DMs)
+ };
++static_assert(sizeof(NodeEntry) <= 156, "NodeEntry grew: the node table is sized for about 150 bytes per entry");
+ 
+ // LocalStats is a snapshot a node sends when asked, and only the most recent answer is
+ // of any interest - keeping eleven counters for every node in the table is not worth
+diff --git a/firmware/application/apps/mesh/mesh_protocol.cpp b/firmware/application/apps/mesh/mesh_protocol.cpp
+index b9a9e4d..3e6db1f 100644
+--- a/firmware/application/apps/mesh/mesh_protocol.cpp
++++ b/firmware/application/apps/mesh/mesh_protocol.cpp
+@@ -273,9 +273,9 @@ bool PositionData::decode(const uint8_t* buf, size_t len, PositionData& out) {
+             const uint32_t val = read_le32(buf + i);
+             i += 4;
+             if (field_num == 1) {
+-                out.latitude = static_cast<int32_t>(val) * 1e-7;
++                out.latitude.raw = static_cast<int32_t>(val);
+             } else if (field_num == 2) {
+-                out.longitude = static_cast<int32_t>(val) * 1e-7;
++                out.longitude.raw = static_cast<int32_t>(val);
+             } else if (field_num == 4) {
+                 out.timestamp = val;
+             }
+@@ -302,11 +302,11 @@ size_t PositionData::encode(uint8_t* buf, size_t max_len) const {
+     size_t i = 0;
+     // field 1: latitude_i (sfixed32)
+     buf[i++] = 0x0D;
+-    write_le32(buf + i, static_cast<uint32_t>(static_cast<int32_t>(latitude * 1e7)));
++    write_le32(buf + i, static_cast<uint32_t>(latitude.raw));
+     i += 4;
+     // field 2: longitude_i (sfixed32)
+     buf[i++] = 0x15;
+-    write_le32(buf + i, static_cast<uint32_t>(static_cast<int32_t>(longitude * 1e7)));
++    write_le32(buf + i, static_cast<uint32_t>(longitude.raw));
+     i += 4;
+     // field 3: altitude (int32 varint; negatives sign-extend to 64-bit per proto)
+     if (altitude_m != 0) {
+diff --git a/firmware/application/apps/mesh/mesh_protocol.hpp b/firmware/application/apps/mesh/mesh_protocol.hpp
+index 7e05d21..1622ecd 100644
+--- a/firmware/application/apps/mesh/mesh_protocol.hpp
++++ b/firmware/application/apps/mesh/mesh_protocol.hpp
+@@ -13,6 +13,7 @@
+ #define __MESH_PROTOCOL_H__
+ 
+ #include <cstdint>
++#include <limits>
+ #include <cstring>
+ #include <array>
+ #include <string>
+@@ -151,9 +152,52 @@ struct DecodedData {
+ };
+ 
+ // ---- Position message (portnum=3) ----------------------------------------
++// Compact storage helpers. Both convert to and from the plain type implicitly, so the code that reads and writes the
++// fields stays as it was; only the bytes per node database entry shrink.
++//  * Fixed<T, SCALE>: a float kept as a small integer (value * SCALE), saturating at the type's range.
++//  * Coord: a latitude/longitude kept as the 1e-7 degree integer it travels as on the wire.
++template <typename T, int SCALE>
++struct Fixed {
++    T raw{0};
++    constexpr Fixed() = default;
++    constexpr Fixed(float f) : raw(to_raw(f)) {}
++    constexpr Fixed& operator=(float f) {
++        raw = to_raw(f);
++        return *this;
++    }
++    constexpr operator float() const { return static_cast<float>(raw) / static_cast<float>(SCALE); }
++
++   private:
++    static constexpr T to_raw(float f) {
++        const float s = f * static_cast<float>(SCALE);
++        const float lo = static_cast<float>(std::numeric_limits<T>::min());
++        const float hi = static_cast<float>(std::numeric_limits<T>::max());
++        return s <= lo ? std::numeric_limits<T>::min()
++                       : s >= hi ? std::numeric_limits<T>::max()
++                                 : static_cast<T>(s >= 0.0f ? s + 0.5f : s - 0.5f);
++    }
++};
++
++struct Coord {
++    int32_t raw{0};  // degrees * 1e7
++    constexpr Coord() = default;
++    constexpr Coord(double d) : raw(to_raw(d)) {}
++    constexpr Coord& operator=(double d) {
++        raw = to_raw(d);
++        return *this;
++    }
++    constexpr operator double() const { return static_cast<double>(raw) * 1e-7; }
++
++   private:
++    static constexpr int32_t to_raw(double d) {
++        const double s = d * 1e7;
++        return s <= -2147483648.0 ? INT32_MIN : s >= 2147483647.0 ? INT32_MAX : static_cast<int32_t>(s >= 0.0 ? s + 0.5 : s - 0.5);
++    }
++};
++
+ struct PositionData {
+-    double latitude{0.0};
+-    double longitude{0.0};
++    Coord latitude{};
++    Coord longitude{};
+     int32_t altitude_m{0};
+     uint32_t timestamp{0};
+     uint8_t satellites_in_view{0};
+-- 
+2.39.5 (Apple Git-154)
+
