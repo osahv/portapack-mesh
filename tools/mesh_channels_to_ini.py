@@ -5,7 +5,7 @@ The keys are read straight from the node over TCP or serial; no key is printed o
 point it at (plain text on the SD card - keep the card private).
 
   pip install meshtastic
-  python3 tools/mesh_channels_to_ini.py --host 192.168.0.149 --ini /Volumes/MAYHEM/SETTINGS/meshtastic.ini
+  python3 tools/mesh_channels_to_ini.py --host 192.168.1.50 --ini /Volumes/MAYHEM/SETTINGS/meshtastic.ini
   python3 tools/mesh_channels_to_ini.py --port /dev/cu.usbserial-0001 --ini ... --dry-run     # show what would be written
 
 The app has 10 custom channel slots (c1..c10). Existing lines of the .ini are kept; only c<N>_name / c<N>_key / c<N>_en
