@@ -3,3 +3,4 @@ dist/
 *.ini
 *.key
 .DS_Store
+sd-backup-*/
